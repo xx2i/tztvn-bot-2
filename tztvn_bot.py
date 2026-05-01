@@ -1,4 +1,5 @@
 import os
+import asyncio
 import logging
 import threading
 import requests
@@ -292,11 +293,14 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ══════════════════════════════════════
 #        تشغيل البوت
 # ══════════════════════════════════════
-app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-app.add_handler(CommandHandler("start",  start))
-app.add_handler(CommandHandler("reset",  reset))
-app.add_handler(CommandHandler("search", search_cmd))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+async def main():
+    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    application.add_handler(CommandHandler("start",  start))
+    application.add_handler(CommandHandler("reset",  reset))
+    application.add_handler(CommandHandler("search", search_cmd))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    print("✅ TZTVN Bot يعمل الآن...")
+    await application.run_polling()
 
-print("✅ TZTVN Bot يعمل الآن...")
-app.run_polling()
+if __name__ == "__main__":
+    asyncio.run(main())
