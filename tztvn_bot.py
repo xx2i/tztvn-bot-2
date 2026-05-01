@@ -9,8 +9,6 @@ from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, fil
 from groq import Groq
 
 # ══════════════════════════════════════
-#   الإعدادات - تُقرأ من Environment Variables
-# ══════════════════════════════════════
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GROQ_API_KEY   = os.environ.get("GROQ_API_KEY")
 TMDB_API_KEY   = os.environ.get("TMDB_API_KEY")
@@ -37,42 +35,18 @@ def run_server():
 threading.Thread(target=run_server, daemon=True).start()
 
 # ══════════════════════════════════════
-#           System Prompt
-# ══════════════════════════════════════
 SYSTEM_PROMPT = """
-أنت الذكاء الاصطناعي الرسمي، الحصري، والناطق باسم منصة "TZTVN" (المنصة الرائدة في عرض الأفلام والمسلسلات والوثائقيات للجمهور التونسي والعربي). أنت تعمل داخل مجموعة تيليجرام خاصة، ووظيفتك الأساسية هي النقاش، التوجيه، وتقديم التوصيات السينمائية لأعضاء المجموعة.
+أنت الذكاء الاصطناعي الرسمي، الحصري، والناطق باسم منصة "TZTVN". أنت تعمل داخل مجموعة تيليجرام خاصة.
 
-عليك الالتزام الصارم بالقواعد التالية في كل إجابة تقدمها، وبدون أي استثناءات:
-
-1. هوية البوت والولاء:
-- أنت لست مساعداً ذكياً عاماً. أنت "مساعد TZTVN السينمائي".
-- إذا سُئلت "من أنت؟" تجيب بأنك الذكاء الاصطناعي لمنصة TZTVN.
-
-2. حصرية المحتوى:
-- نطاق حديثك يقتصر حصرياً على: الأفلام، المسلسلات، الأبطال، المخرجين، التقييمات السينمائية.
-- إذا سألك أحد عن موضوع خارج السينما قل: "عذراً، أنا مبرمج حصرياً للحديث عن سحر السينما والأفلام عبر منصة TZTVN. هل تبحث عن فيلم معين لتشاهده اليوم؟"
-
-3. طول الإجابة:
-- إجاباتك دائماً متوسطة الطول (3 إلى 5 أسطر كحد أقصى). لا قصيرة جداً ولا مقالات طويلة.
-
-4. التعامل مع الروابط:
-- القنوات الرسمية: @tztvn و @o1tvn وسيرفرات "Server 1 | TZTVN".
-- روابط @tztvn أو @o1tvn = آمنة تفاعل معها بإيجابية.
-- روابط خارجية غريبة = أخبر المستخدم بلطف أنها لا تنتمي لـ TZTVN.
-
-5. نبرة الصوت:
-- كن ودوداً، حماسياً، وعاشقاً للسينما.
-- استخدم مصطلحات: "تحفة فنية"، "أحداث مشوقة"، "حبكة درامية".
-- شجع المستخدمين دائماً على متابعة جديد TZTVN.
-
-6. معلومات الأفلام:
-- عندما يُرفق لك معلومات فيلم من TMDb، استخدمها كمرجع أساسي وقدمها بأسلوب سينمائي جذاب.
-- اذكر التقييم وتاريخ الإصدار والوصف بطريقة شيقة.
+عليك الالتزام بهذه القواعد:
+1. أنت "مساعد TZTVN السينمائي" فقط.
+2. نطاق حديثك: الأفلام، المسلسلات، التقييمات السينمائية فقط.
+3. إجاباتك 3 إلى 5 أسطر فقط.
+4. القنوات الرسمية: @tztvn و @o1tvn.
+5. كن ودوداً وحماسياً وعاشقاً للسينما.
+6. عندما ترفق معلومات TMDb استخدمها بأسلوب جذاب.
 """
 
-# ══════════════════════════════════════
-#        قائمة الكلمات المحظورة
-# ══════════════════════════════════════
 BANNED_WORDS = [
     "سكس","نيك","قحبة","قحبه","قحب","عصب","عصبه","عصبة","سيكس","انيكك",
     "بزول","بزل","بوالة","nike","3aseba","bazole","zeb","zebe","zbe","زب",
@@ -105,53 +79,45 @@ def contains_banned(text: str) -> bool:
     return False
 
 # ══════════════════════════════════════
-#         TMDb - بحث عن فيلم/مسلسل
-# ══════════════════════════════════════
 def search_tmdb(query: str) -> str:
     try:
         url = "https://api.themoviedb.org/3/search/multi"
         params = {"api_key": TMDB_API_KEY, "query": query, "language": "ar", "page": 1}
         r = requests.get(url, params=params, timeout=10)
         data = r.json()
-
         if not data.get("results"):
             params["language"] = "en-US"
             r = requests.get(url, params=params, timeout=10)
             data = r.json()
-
         if not data.get("results"):
             return ""
-
         item = data["results"][0]
         media_type = item.get("media_type", "movie")
-
         if media_type == "movie":
             title    = item.get("title") or item.get("original_title", "غير معروف")
-            overview = item.get("overview", "لا يوجد وصف متاح")
+            overview = item.get("overview", "لا يوجد وصف")
             rating   = item.get("vote_average", 0)
             date     = item.get("release_date", "غير محدد")
             type_ar  = "فيلم"
         elif media_type == "tv":
             title    = item.get("name") or item.get("original_name", "غير معروف")
-            overview = item.get("overview", "لا يوجد وصف متاح")
+            overview = item.get("overview", "لا يوجد وصف")
             rating   = item.get("vote_average", 0)
             date     = item.get("first_air_date", "غير محدد")
             type_ar  = "مسلسل"
         else:
             return ""
-
         from datetime import datetime
         status = "✅ نزل"
         if date and date != "غير محدد":
             try:
                 release = datetime.strptime(date[:10], "%Y-%m-%d")
                 if release > datetime.now():
-                    status = f"🔜 لم ينزل بعد - موعد الإصدار: {date[:10]}"
+                    status = f"🔜 لم ينزل بعد - موعد: {date[:10]}"
                 else:
                     status = f"✅ نزل بتاريخ {date[:10]}"
             except:
                 pass
-
         return (
             f"📽️ [{type_ar}] {title}\n"
             f"📅 {status}\n"
@@ -162,9 +128,6 @@ def search_tmdb(query: str) -> str:
         logging.error(f"TMDb error: {e}")
         return ""
 
-# ══════════════════════════════════════
-#    كشف هل السؤال عن فيلم/مسلسل؟
-# ══════════════════════════════════════
 MOVIE_KEYWORDS = [
     "فيلم","مسلسل","نزل","يطلع","طلع","اصدر","صدر","موعد","اصدار",
     "متى","هل","عرض","الجزء","سيزون","موسم","هل نزل","متى ينزل",
@@ -190,52 +153,35 @@ def extract_movie_name(text: str) -> str:
         result = result.replace(r, "")
     return result.strip()
 
-# ══════════════════════════════════════
-#       Groq Client + Chat History
-# ══════════════════════════════════════
 groq_client  = Groq(api_key=GROQ_API_KEY)
 chat_history: dict = {}
 
-# ══════════════════════════════════════
-#           معالج الرسائل
-# ══════════════════════════════════════
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
-
     chat_id   = update.message.chat_id
     user_name = update.message.from_user.first_name or "عضو"
     text      = update.message.text
-
     if contains_banned(text):
-        await update.message.reply_text(
-            "⚠️ رسالتك تحتوي على محتوى مخالف لقواعد المجموعة. يرجى الالتزام باللياقة 🙏"
-        )
+        await update.message.reply_text("⚠️ رسالتك تحتوي على محتوى مخالف. يرجى الالتزام باللياقة 🙏")
         return
-
     if chat_id not in chat_history:
         chat_history[chat_id] = []
-
     bot_username = (await context.bot.get_me()).username
     mentioned    = f"@{bot_username}" in text or BOT_NAME.lower() in text.lower()
     is_private   = update.message.chat.type == "private"
-
     if not (mentioned or is_private):
         chat_history[chat_id].append({"role": "user", "content": f"{user_name}: {text}"})
         return
-
     tmdb_info = ""
     if is_movie_question(text):
         movie_name = extract_movie_name(text)
         if len(movie_name) > 2:
             tmdb_info = search_tmdb(movie_name)
-
     user_message = f"{user_name}: {text}"
     if tmdb_info:
-        user_message += f"\n\n[معلومات من قاعدة بيانات TMDb الرسمية:]\n{tmdb_info}"
-
+        user_message += f"\n\n[معلومات TMDb:]\n{tmdb_info}"
     chat_history[chat_id].append({"role": "user", "content": user_message})
-
     try:
         response = groq_client.chat.completions.create(
             model=MODEL_NAME,
@@ -246,31 +192,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         )
         reply = response.choices[0].message.content
-
         if contains_banned(reply):
-            reply = "عذراً، لا يمكنني الإجابة على هذا. 🎬 هل تبحث عن توصية سينمائية؟"
-
+            reply = "عذراً، لا يمكنني الإجابة. 🎬 هل تبحث عن توصية سينمائية؟"
         chat_history[chat_id].append({"role": "assistant", "content": reply})
         await update.message.reply_text(reply)
-
     except Exception as e:
         logging.error(f"Groq error: {e}")
-        await update.message.reply_text("⚠️ حدث خطأ مؤقت، حاول مجدداً بعد لحظات.")
+        await update.message.reply_text("⚠️ حدث خطأ مؤقت، حاول مجدداً.")
 
-# ══════════════════════════════════════
-#        أمر /start
-# ══════════════════════════════════════
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🎬 مرحباً بك في مساعد TZTVN السينمائي!\n"
         "أنا هنا لمساعدتك في اكتشاف أفضل الأفلام والمسلسلات.\n"
-        "يمكنني البحث عن أي فيلم أو مسلسل وإخبارك هل نزل أم لا! 🔍\n"
+        "يمكنني البحث عن أي فيلم وإخبارك هل نزل أم لا! 🔍\n"
         "ناديني بـ @tztvn أو اذكر اسمي في المجموعة 😊"
     )
 
-# ══════════════════════════════════════
-#        أمر /search
-# ══════════════════════════════════════
 async def search_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("🔍 استخدم: /search اسم_الفيلم\nمثال: /search Dune")
@@ -280,27 +217,30 @@ async def search_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if info:
         await update.message.reply_text(f"🎬 نتيجة البحث:\n\n{info}")
     else:
-        await update.message.reply_text(f"❌ لم أجد نتائج لـ '{query}'. تأكد من الاسم وحاول مجدداً.")
+        await update.message.reply_text(f"❌ لم أجد نتائج لـ '{query}'.")
 
-# ══════════════════════════════════════
-#        أمر /reset
-# ══════════════════════════════════════
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.message.chat_id
     chat_history[chat_id] = []
     await update.message.reply_text("✅ تم مسح تاريخ المحادثة!")
 
-# ══════════════════════════════════════
-#        تشغيل البوت
-# ══════════════════════════════════════
 async def main():
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     application.add_handler(CommandHandler("start",  start))
     application.add_handler(CommandHandler("reset",  reset))
     application.add_handler(CommandHandler("search", search_cmd))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("✅ TZTVN Bot يعمل الآن...")
-    await application.run_polling()
+
+    print("✅ TZTVN Bot يبدأ التشغيل...")
+
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()
+
+    print("✅ TZTVN Bot يعمل الآن!")
+
+    # ابق شغالاً إلى الأبد
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
     asyncio.run(main())
