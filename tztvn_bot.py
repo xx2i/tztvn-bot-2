@@ -1,5 +1,4 @@
 import os
-import asyncio
 import logging
 import threading
 import requests
@@ -8,7 +7,6 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
 from groq import Groq
 
-# ══════════════════════════════════════
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GROQ_API_KEY   = os.environ.get("GROQ_API_KEY")
 TMDB_API_KEY   = os.environ.get("TMDB_API_KEY")
@@ -17,9 +15,7 @@ MODEL_NAME     = "llama-3.3-70b-versatile"
 
 logging.basicConfig(level=logging.INFO)
 
-# ══════════════════════════════════════
-#   Web Server (للـ UptimeRobot)
-# ══════════════════════════════════════
+# Web Server
 class PingHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -34,10 +30,8 @@ def run_server():
 
 threading.Thread(target=run_server, daemon=True).start()
 
-# ══════════════════════════════════════
 SYSTEM_PROMPT = """
 أنت الذكاء الاصطناعي الرسمي، الحصري، والناطق باسم منصة "TZTVN". أنت تعمل داخل مجموعة تيليجرام خاصة.
-
 عليك الالتزام بهذه القواعد:
 1. أنت "مساعد TZTVN السينمائي" فقط.
 2. نطاق حديثك: الأفلام، المسلسلات، التقييمات السينمائية فقط.
@@ -78,7 +72,6 @@ def contains_banned(text: str) -> bool:
             return True
     return False
 
-# ══════════════════════════════════════
 def search_tmdb(query: str) -> str:
     try:
         url = "https://api.themoviedb.org/3/search/multi"
@@ -115,13 +108,13 @@ def search_tmdb(query: str) -> str:
                 if release > datetime.now():
                     status = f"🔜 لم ينزل بعد - موعد: {date[:10]}"
                 else:
-                    status = f"✅ نزل بتاريخ {date[:10]}"
+                    status = f"✅ نزل {date[:10]}"
             except:
                 pass
         return (
             f"📽️ [{type_ar}] {title}\n"
             f"📅 {status}\n"
-            f"⭐ التقييم: {rating}/10\n"
+            f"⭐ {rating}/10\n"
             f"📝 {overview[:200]}{'...' if len(overview) > 200 else ''}"
         )
     except Exception as e:
@@ -130,18 +123,15 @@ def search_tmdb(query: str) -> str:
 
 MOVIE_KEYWORDS = [
     "فيلم","مسلسل","نزل","يطلع","طلع","اصدر","صدر","موعد","اصدار",
-    "متى","هل","عرض","الجزء","سيزون","موسم","هل نزل","متى ينزل",
+    "متى","هل","عرض","الجزء","سيزون","موسم",
     "movie","series","film","release","out","watch","season"
 ]
 
-def is_movie_question(text: str) -> bool:
-    text_lower = text.lower()
-    for kw in MOVIE_KEYWORDS:
-        if kw in text_lower:
-            return True
-    return False
+def is_movie_question(text):
+    t = text.lower()
+    return any(kw in t for kw in MOVIE_KEYWORDS)
 
-def extract_movie_name(text: str) -> str:
+def extract_movie_name(text):
     removes = [
         "هل نزل","هل طلع","هل اصدر","هل صدر","متى ينزل","متى يطلع",
         "متى نزل","موعد","فيلم","مسلسل","الجزء","سيزون","موسم",
@@ -154,7 +144,7 @@ def extract_movie_name(text: str) -> str:
     return result.strip()
 
 groq_client  = Groq(api_key=GROQ_API_KEY)
-chat_history: dict = {}
+chat_history = {}
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
@@ -167,8 +157,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if chat_id not in chat_history:
         chat_history[chat_id] = []
-    bot_username = (await context.bot.get_me()).username
-    mentioned    = f"@{bot_username}" in text or BOT_NAME.lower() in text.lower()
+    bot_me       = await context.bot.get_me()
+    mentioned    = f"@{bot_me.username}" in text or BOT_NAME.lower() in text.lower()
     is_private   = update.message.chat.type == "private"
     if not (mentioned or is_private):
         chat_history[chat_id].append({"role": "user", "content": f"{user_name}: {text}"})
@@ -203,44 +193,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🎬 مرحباً بك في مساعد TZTVN السينمائي!\n"
-        "أنا هنا لمساعدتك في اكتشاف أفضل الأفلام والمسلسلات.\n"
-        "يمكنني البحث عن أي فيلم وإخبارك هل نزل أم لا! 🔍\n"
         "ناديني بـ @tztvn أو اذكر اسمي في المجموعة 😊"
     )
 
 async def search_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("🔍 استخدم: /search اسم_الفيلم\nمثال: /search Dune")
+        await update.message.reply_text("🔍 مثال: /search Dune")
         return
     query = " ".join(context.args)
     info  = search_tmdb(query)
     if info:
-        await update.message.reply_text(f"🎬 نتيجة البحث:\n\n{info}")
+        await update.message.reply_text(f"🎬 نتيجة:\n\n{info}")
     else:
         await update.message.reply_text(f"❌ لم أجد نتائج لـ '{query}'.")
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.message.chat_id
-    chat_history[chat_id] = []
+    chat_history[update.message.chat_id] = []
     await update.message.reply_text("✅ تم مسح تاريخ المحادثة!")
 
-async def main():
-    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    application.add_handler(CommandHandler("start",  start))
-    application.add_handler(CommandHandler("reset",  reset))
-    application.add_handler(CommandHandler("search", search_cmd))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    print("✅ TZTVN Bot يبدأ التشغيل...")
-
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()
-
+def main():
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler("start",  start))
+    app.add_handler(CommandHandler("reset",  reset))
+    app.add_handler(CommandHandler("search", search_cmd))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("✅ TZTVN Bot يعمل الآن!")
-
-    # ابق شغالاً إلى الأبد
-    await asyncio.Event().wait()
+    app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
