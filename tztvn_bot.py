@@ -1,6 +1,6 @@
+import os
 import logging
 import threading
-import time
 import requests
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
@@ -8,11 +8,11 @@ from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, fil
 from groq import Groq
 
 # ══════════════════════════════════════
-#           الإعدادات الأساسية
+#   الإعدادات - تُقرأ من Environment Variables
 # ══════════════════════════════════════
-TELEGRAM_TOKEN = "8698916636:AAHMYHlwv8M5lcuQCc5uv-63jb92_jez-pA"
-GROQ_API_KEY   = "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"
-TMDB_API_KEY   = "25d84a7d8697acb8dc0dd0fd0660d234"
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+GROQ_API_KEY   = os.environ.get("GROQ_API_KEY")
+TMDB_API_KEY   = os.environ.get("TMDB_API_KEY")
 BOT_NAME       = "tztvn"
 MODEL_NAME     = "llama-3.3-70b-versatile"
 
@@ -27,7 +27,7 @@ class PingHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"TZTVN Bot is alive!")
     def log_message(self, format, *args):
-        pass  # أخفِ logs السيرفر
+        pass
 
 def run_server():
     server = HTTPServer(("0.0.0.0", 8080), PingHandler)
@@ -107,21 +107,13 @@ def contains_banned(text: str) -> bool:
 #         TMDb - بحث عن فيلم/مسلسل
 # ══════════════════════════════════════
 def search_tmdb(query: str) -> str:
-    """يبحث في TMDb ويرجع معلومات الفيلم/المسلسل"""
     try:
-        # البحث أولاً في الأفلام
-        url = f"https://api.themoviedb.org/3/search/multi"
-        params = {
-            "api_key": TMDB_API_KEY,
-            "query": query,
-            "language": "ar",
-            "page": 1
-        }
+        url = "https://api.themoviedb.org/3/search/multi"
+        params = {"api_key": TMDB_API_KEY, "query": query, "language": "ar", "page": 1}
         r = requests.get(url, params=params, timeout=10)
         data = r.json()
 
         if not data.get("results"):
-            # جرب بالإنجليزية
             params["language"] = "en-US"
             r = requests.get(url, params=params, timeout=10)
             data = r.json()
@@ -133,21 +125,20 @@ def search_tmdb(query: str) -> str:
         media_type = item.get("media_type", "movie")
 
         if media_type == "movie":
-            title     = item.get("title") or item.get("original_title", "غير معروف")
-            overview  = item.get("overview", "لا يوجد وصف متاح")
-            rating    = item.get("vote_average", 0)
-            date      = item.get("release_date", "غير محدد")
-            type_ar   = "فيلم"
+            title    = item.get("title") or item.get("original_title", "غير معروف")
+            overview = item.get("overview", "لا يوجد وصف متاح")
+            rating   = item.get("vote_average", 0)
+            date     = item.get("release_date", "غير محدد")
+            type_ar  = "فيلم"
         elif media_type == "tv":
-            title     = item.get("name") or item.get("original_name", "غير معروف")
-            overview  = item.get("overview", "لا يوجد وصف متاح")
-            rating    = item.get("vote_average", 0)
-            date      = item.get("first_air_date", "غير محدد")
-            type_ar   = "مسلسل"
+            title    = item.get("name") or item.get("original_name", "غير معروف")
+            overview = item.get("overview", "لا يوجد وصف متاح")
+            rating   = item.get("vote_average", 0)
+            date     = item.get("first_air_date", "غير محدد")
+            type_ar  = "مسلسل"
         else:
             return ""
 
-        # هل نزل؟
         from datetime import datetime
         status = "✅ نزل"
         if date and date != "غير محدد":
@@ -160,14 +151,12 @@ def search_tmdb(query: str) -> str:
             except:
                 pass
 
-        info = (
+        return (
             f"📽️ [{type_ar}] {title}\n"
             f"📅 {status}\n"
             f"⭐ التقييم: {rating}/10\n"
             f"📝 {overview[:200]}{'...' if len(overview) > 200 else ''}"
         )
-        return info
-
     except Exception as e:
         logging.error(f"TMDb error: {e}")
         return ""
@@ -177,7 +166,7 @@ def search_tmdb(query: str) -> str:
 # ══════════════════════════════════════
 MOVIE_KEYWORDS = [
     "فيلم","مسلسل","نزل","يطلع","طلع","اصدر","صدر","موعد","اصدار",
-    "متى","هل","عرض","الجزء","سيزون","موسم","ايه","هل نزل","متى ينزل",
+    "متى","هل","عرض","الجزء","سيزون","موسم","هل نزل","متى ينزل",
     "movie","series","film","release","out","watch","season"
 ]
 
@@ -189,7 +178,6 @@ def is_movie_question(text: str) -> bool:
     return False
 
 def extract_movie_name(text: str) -> str:
-    """استخرج اسم الفيلم من السؤال"""
     removes = [
         "هل نزل","هل طلع","هل اصدر","هل صدر","متى ينزل","متى يطلع",
         "متى نزل","موعد","فيلم","مسلسل","الجزء","سيزون","موسم",
@@ -218,42 +206,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.message.from_user.first_name or "عضو"
     text      = update.message.text
 
-    # ── فحص محتوى المستخدم ──
     if contains_banned(text):
         await update.message.reply_text(
             "⚠️ رسالتك تحتوي على محتوى مخالف لقواعد المجموعة. يرجى الالتزام باللياقة 🙏"
         )
         return
 
-    # ── تهيئة تاريخ المحادثة ──
     if chat_id not in chat_history:
         chat_history[chat_id] = []
 
-    # ── هل تم استدعاء البوت؟ ──
     bot_username = (await context.bot.get_me()).username
     mentioned    = f"@{bot_username}" in text or BOT_NAME.lower() in text.lower()
     is_private   = update.message.chat.type == "private"
 
     if not (mentioned or is_private):
-        # احفظ الرسالة في التاريخ بدون رد
         chat_history[chat_id].append({"role": "user", "content": f"{user_name}: {text}"})
         return
 
-    # ── بحث TMDb إذا السؤال عن فيلم ──
     tmdb_info = ""
     if is_movie_question(text):
         movie_name = extract_movie_name(text)
         if len(movie_name) > 2:
             tmdb_info = search_tmdb(movie_name)
 
-    # ── بناء الرسالة للـ AI ──
     user_message = f"{user_name}: {text}"
     if tmdb_info:
         user_message += f"\n\n[معلومات من قاعدة بيانات TMDb الرسمية:]\n{tmdb_info}"
 
     chat_history[chat_id].append({"role": "user", "content": user_message})
 
-    # ── طلب الـ AI ──
     try:
         response = groq_client.chat.completions.create(
             model=MODEL_NAME,
@@ -287,7 +268,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ══════════════════════════════════════
-#        أمر /search للبحث المباشر
+#        أمر /search
 # ══════════════════════════════════════
 async def search_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
@@ -317,5 +298,5 @@ app.add_handler(CommandHandler("reset",  reset))
 app.add_handler(CommandHandler("search", search_cmd))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-print("✅ TZTVN Bot يعمل الآن مع TMDb + UptimeRobot Support...")
+print("✅ TZTVN Bot يعمل الآن...")
 app.run_polling()
