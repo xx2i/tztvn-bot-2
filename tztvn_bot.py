@@ -2,7 +2,6 @@ import os
 import logging
 import threading
 import requests
-from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
@@ -13,24 +12,23 @@ TELEGRAM_TOKEN  = os.environ.get("TELEGRAM_TOKEN")
 TMDB_API_KEY    = os.environ.get("TMDB_API_KEY")
 OMDB_API_KEY    = os.environ.get("OMDB_API_KEY")
 TRAKT_CLIENT_ID = os.environ.get("TRAKT_CLIENT_ID")
+EXA_API_KEY     = os.environ.get("EXA_API_KEY")
 BOT_NAME        = "tztvn"
 MODEL_NAME      = os.environ.get("MODEL_NAME", "meta-llama/llama-4-scout-17b-16e-instruct")
 
-GROQ_API_KEYS = [
+GROQ_API_KEYS = [k for k in dict.fromkeys([
     os.environ.get("GROQ_API_KEY"),
     os.environ.get("GROQ_API_KEY_1"),
     os.environ.get("GROQ_API_KEY_2"),
     os.environ.get("GROQ_API_KEY_3"),
-]
-GROQ_API_KEYS = [k for k in dict.fromkeys(GROQ_API_KEYS) if k]
+]) if k]
 
-TAVILY_API_KEYS = [
+TAVILY_API_KEYS = [k for k in dict.fromkeys([
     os.environ.get("TAVILY_API_KEY"),
     os.environ.get("TAVILY_API_KEY_1"),
     os.environ.get("TAVILY_API_KEY_2"),
     os.environ.get("TAVILY_API_KEY_3"),
-]
-TAVILY_API_KEYS = [k for k in dict.fromkeys(TAVILY_API_KEYS) if k]
+]) if k]
 
 logging.basicConfig(level=logging.INFO)
 
@@ -126,7 +124,7 @@ def fuzzy_score(query: str, candidate: str) -> int:
         fuzz.token_set_ratio(q, c),
     )
 
-# ── OMDb: بحث متعدد النتائج أولاً ───────────────────────────────────────────
+# ── OMDb ────────────────────────────────────────────────────────────────────
 def omdb_search_list(query: str) -> list:
     if not OMDB_API_KEY:
         return []
@@ -136,9 +134,8 @@ def omdb_search_list(query: str) -> list:
             params={"apikey": OMDB_API_KEY, "s": query, "page": 1},
             timeout=10
         )
-        data = r.json()
         results = []
-        for item in data.get("Search", []):
+        for item in r.json().get("Search", []):
             title   = item.get("Title", "")
             year    = item.get("Year", "")
             imdb_id = item.get("imdbID", "")
@@ -186,7 +183,7 @@ def omdb_get_by_id(imdb_id: str) -> dict:
         logging.error(f"OMDb get by id error: {e}")
         return {}
 
-# ── TMDb: بحث متعدد اللغات ──────────────────────────────────────────────────
+# ── TMDb ────────────────────────────────────────────────────────────────────
 def tmdb_search_list(query: str) -> list:
     if not TMDB_API_KEY:
         return []
@@ -263,12 +260,13 @@ def tmdb_get_details(tmdb_id: int, media_type: str) -> dict:
 
 def get_justwatch(imdb_id_or_query: str) -> str:
     try:
-        base = "https://imdb.iamidiotareyoutoo.com"
-        r = requests.get(f"{base}/justwatch", params={"q": imdb_id_or_query}, timeout=10)
+        r = requests.get(
+            "https://imdb.iamidiotareyoutoo.com/justwatch",
+            params={"q": imdb_id_or_query}, timeout=10
+        )
         jw_data = r.json()
         providers = []
-        items_list = jw_data if isinstance(jw_data, list) else [jw_data]
-        for item in items_list:
+        for item in (jw_data if isinstance(jw_data, list) else [jw_data]):
             name = item.get("provider_name") or item.get("name", "")
             if name:
                 providers.append(name)
@@ -278,7 +276,7 @@ def get_justwatch(imdb_id_or_query: str) -> str:
         pass
     return ""
 
-CONFIDENCE_HIGH = 75
+CONFIDENCE_HIGH   = 75
 CONFIDENCE_MEDIUM = 50
 
 def smart_movie_search(query: str) -> dict:
@@ -316,25 +314,16 @@ def smart_movie_search(query: str) -> dict:
 def _build_omdb_card(d: dict, jw: str = "") -> str:
     lines = []
     title = d.get("title", "")
-    year = d.get("year", "")
+    year  = d.get("year", "")
     lines.append(f"🎬 {title} ({year})" if year else f"🎬 {title}")
-    if d.get("genre"):
-        lines.append(f"🎭 {d['genre']}")
-    if d.get("director"):
-        lines.append(f"🎥 المخرج: {d['director']}")
-    if d.get("runtime"):
-        lines.append(f"⏱️ المدة: {d['runtime']}")
+    if d.get("genre"):    lines.append(f"🎭 {d['genre']}")
+    if d.get("director"): lines.append(f"🎥 المخرج: {d['director']}")
+    if d.get("runtime"):  lines.append(f"⏱️ المدة: {d['runtime']}")
     ratings = []
-    if d.get("imdb_rating"):
-        ratings.append(f"⭐ IMDb: {d['imdb_rating']}")
-    if d.get("rt_rating"):
-        ratings.append(f"🍅 RT: {d['rt_rating']}")
-    if ratings:
-        lines.append(" | ".join(ratings))
-    if jw:
-        lines.append(f"📺 شاهده على: {jw}")
-    else:
-        lines.append("📺 غير متوفر حالياً على منصات البث")
+    if d.get("imdb_rating"): ratings.append(f"⭐ IMDb: {d['imdb_rating']}")
+    if d.get("rt_rating"):   ratings.append(f"🍅 RT: {d['rt_rating']}")
+    if ratings: lines.append(" | ".join(ratings))
+    lines.append(f"📺 شاهده على: {jw}" if jw else "📺 غير متوفر حالياً على منصات البث")
     plot = d.get("plot", "")
     if plot:
         lines.append(f"📝 {plot[:220]}{'...' if len(plot) > 220 else ''}")
@@ -342,44 +331,35 @@ def _build_omdb_card(d: dict, jw: str = "") -> str:
 
 def _build_tmdb_card(item: dict, extra: dict, omdb: dict) -> str:
     lines = []
-    title = item.get("title", "")
-    year = item.get("year", "")
+    title   = item.get("title", "")
+    year    = item.get("year", "")
     type_ar = "مسلسل" if item.get("media_type") == "tv" else "فيلم"
     lines.append(f"🎬 [{type_ar}] {title} ({year})" if year else f"🎬 [{type_ar}] {title}")
-    if omdb.get("genre"):
-        lines.append(f"🎭 {omdb['genre']}")
-    if omdb.get("director"):
-        lines.append(f"🎥 المخرج: {omdb['director']}")
-    if omdb.get("runtime"):
-        lines.append(f"⏱️ المدة: {omdb['runtime']}")
+    if omdb.get("genre"):    lines.append(f"🎭 {omdb['genre']}")
+    if omdb.get("director"): lines.append(f"🎥 المخرج: {omdb['director']}")
+    if omdb.get("runtime"):  lines.append(f"⏱️ المدة: {omdb['runtime']}")
     ratings = []
     vote = item.get("vote", 0)
-    if vote:
-        ratings.append(f"⭐ TMDb: {vote}/10")
-    if omdb.get("imdb_rating"):
-        ratings.append(f"🎭 IMDb: {omdb['imdb_rating']}")
-    if omdb.get("rt_rating"):
-        ratings.append(f"🍅 RT: {omdb['rt_rating']}")
-    if ratings:
-        lines.append(" | ".join(ratings))
+    if vote:                    ratings.append(f"⭐ TMDb: {vote}/10")
+    if omdb.get("imdb_rating"): ratings.append(f"🎭 IMDb: {omdb['imdb_rating']}")
+    if omdb.get("rt_rating"):   ratings.append(f"🍅 RT: {omdb['rt_rating']}")
+    if ratings: lines.append(" | ".join(ratings))
     watch = extra.get("watch", "")
-    if watch:
-        lines.append(f"📺 شاهده على: {watch}")
-    else:
-        lines.append("📺 غير متوفر حالياً على منصات البث")
+    lines.append(f"📺 شاهده على: {watch}" if watch else "📺 غير متوفر حالياً على منصات البث")
     overview = item.get("overview", "") or omdb.get("plot", "")
     if overview:
         lines.append(f"📝 {overview[:220]}{'...' if len(overview) > 220 else ''}")
     return "\n".join(lines)
 
+# ── Trakt Trending ──────────────────────────────────────────────────────────
 def get_trakt_trending(media_type: str = "movies", limit: int = 5) -> list:
     try:
         r = requests.get(
             f"https://api.trakt.tv/{media_type}/trending",
             headers={
-                "Content-Type": "application/json",
+                "Content-Type":      "application/json",
                 "trakt-api-version": "2",
-                "trakt-api-key": TRAKT_CLIENT_ID
+                "trakt-api-key":     TRAKT_CLIENT_ID
             },
             params={"limit": limit},
             timeout=10
@@ -393,19 +373,20 @@ def get_trakt_trending(media_type: str = "movies", limit: int = 5) -> list:
         logging.error(f"Trakt error: {e}")
         return []
 
+# ── Web Search Keywords ─────────────────────────────────────────────────────
 SEARCH_NEEDED_KEYWORDS = [
-    "خبر", "أخبار", "جديد", "جديده", "جديدة", "اليوم", "الان", "الآن", "حديث",
-    "مؤخراً", "مؤخرًا", "متى ينزل", "موعد النزول", "موعد الاصدار", "إصدار", "اصدار",
-    "released", "release date", "latest", "news", "update", "updates", "streaming now"
+    "خبر", "أخبار", "اخبار", "جديد", "جديده", "جديدة", "اليوم", "الان", "الآن",
+    "حديث", "مؤخراً", "مؤخرًا", "متى ينزل", "موعد النزول", "موعد الاصدار",
+    "إصدار", "اصدار", "released", "release date", "latest", "news",
+    "update", "updates", "streaming now", "when does", "coming out",
 ]
 
 def needs_web_search(text: str) -> bool:
     lowered = text.lower()
     return any(k.lower() in lowered for k in SEARCH_NEEDED_KEYWORDS)
 
+# ── Tavily Search ───────────────────────────────────────────────────────────
 def tavily_web_search(query: str) -> str:
-    if not TAVILY_API_KEYS:
-        return ""
     for key in TAVILY_API_KEYS:
         try:
             r = requests.post(
@@ -425,21 +406,64 @@ def tavily_web_search(query: str) -> str:
                 data = r.json()
                 lines = []
                 if data.get("answer"):
-                    lines.append(f"ملخص البحث: {data['answer']}")
-                for item in data.get("results", [])[:5]:
-                    title = item.get("title", "")
-                    url = item.get("url", "")
-                    content = (item.get("content", "") or "")[:300]
-                    lines.append(f"- {title}\n  {content}\n  المصدر: {url}")
+                    lines.append(f"ملخص: {data['answer']}")
+                for item in data.get("results", [])[:4]:
+                    content = (item.get("content", "") or "")[:250]
+                    lines.append(f"- {item.get('title','')}\n  {content}\n  المصدر: {item.get('url','')}")
                 if lines:
-                    return "[نتائج بحث الويب]\n" + "\n".join(lines)
+                    return "[نتائج بحث الويب - Tavily]\n" + "\n".join(lines)
             elif r.status_code in (401, 429):
                 continue
         except Exception as e:
-            logging.error(f"Tavily error with key rotation: {e}")
+            logging.error(f"Tavily error: {e}")
             continue
     return ""
 
+# ── Exa Search (Fallback) ───────────────────────────────────────────────────
+def exa_web_search(query: str) -> str:
+    if not EXA_API_KEY:
+        return ""
+    try:
+        r = requests.post(
+            "https://api.exa.ai/search",
+            headers={
+                "x-api-key": EXA_API_KEY,
+                "Content-Type": "application/json",
+            },
+            json={
+                "query": query,
+                "type": "auto",
+                "num_results": 5,
+                "contents": {"highlights": True},
+            },
+            timeout=20,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            lines = []
+            for item in data.get("results", [])[:4]:
+                title     = item.get("title", "")
+                url       = item.get("url", "")
+                highlights = item.get("highlights", [])
+                snippet   = highlights[0] if highlights else ""
+                if snippet:
+                    snippet = snippet[:250]
+                lines.append(f"- {title}\n  {snippet}\n  المصدر: {url}")
+            if lines:
+                return "[نتائج بحث الويب - Exa]\n" + "\n".join(lines)
+    except Exception as e:
+        logging.error(f"Exa error: {e}")
+    return ""
+
+# ── Smart Web Search (Tavily → Exa fallback) ────────────────────────────────
+def smart_web_search(query: str) -> str:
+    result = tavily_web_search(query)
+    if result:
+        return result
+    logging.info("Tavily exhausted, trying Exa fallback...")
+    return exa_web_search(query)
+
+# ── Groq with key rotation ──────────────────────────────────────────────────
 def call_groq(messages: list):
     last_error = None
     for key in GROQ_API_KEYS:
@@ -452,19 +476,19 @@ def call_groq(messages: list):
             )
         except Exception as e:
             last_error = e
-            logging.error(f"Groq key failed, trying next key: {e}")
+            logging.error(f"Groq key failed, trying next: {e}")
             continue
-    raise last_error if last_error else RuntimeError("No Groq API key configured")
+    raise last_error if last_error else RuntimeError("No Groq API key available")
 
-groq_client = None
 chat_history = {}
 
+# ── Bot Logic ────────────────────────────────────────────────────────────────
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
-    chat_id = update.message.chat_id
+    chat_id   = update.message.chat_id
     user_name = update.message.from_user.first_name or "عضو"
-    text = update.message.text
+    text      = update.message.text
 
     if contains_banned(text):
         await update.message.reply_text("⚠️ رسالتك تحتوي على محتوى مخالف. يرجى الالتزام باللياقة 🙏")
@@ -473,8 +497,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id not in chat_history:
         chat_history[chat_id] = []
 
-    bot_me = await context.bot.get_me()
-    mentioned = f"@{bot_me.username}" in text or BOT_NAME.lower() in text.lower()
+    bot_me     = await context.bot.get_me()
+    mentioned  = f"@{bot_me.username}" in text or BOT_NAME.lower() in text.lower()
     is_private = update.message.chat.type == "private"
 
     if not (mentioned or is_private):
@@ -484,14 +508,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     clean_text = text.replace(f"@{bot_me.username}", "").replace("tztvn", "").strip()
 
     movie_context = ""
-    search_query = normalize_title(clean_text)
+    search_query  = normalize_title(clean_text)
 
     if search_query and len(search_query) >= 2:
         result = smart_movie_search(search_query)
         if result["status"] == "found":
             movie_context = f"[بيانات الفيلم من قواعد البيانات:]\n{result['card']}"
         elif result["status"] == "suggestions":
-            sug = result["suggestions"]
+            sug      = result["suggestions"]
             sug_text = "\n".join(f"  {i+1}. {s}" for i, s in enumerate(sug))
             movie_context = (
                 f"[لم أجد نتيجة مؤكدة لـ '{result['query']}'، أقرب الاقتراحات:]\n"
@@ -503,7 +527,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     web_context = ""
     if needs_web_search(clean_text):
-        web_context = tavily_web_search(clean_text)
+        web_context = smart_web_search(clean_text)
 
     user_message = f"{user_name}: {clean_text}"
     if movie_context:
@@ -559,7 +583,7 @@ async def search_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def trending_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     movies = get_trakt_trending("movies", 5)
-    shows = get_trakt_trending("shows", 5)
+    shows  = get_trakt_trending("shows", 5)
     msg = "🎬 الأفلام الأكثر مشاهدة هذا الأسبوع:\n"
     for i, m in enumerate(movies, 1):
         msg += f"  {i}. {m['title']} ({m['year']})\n"
@@ -576,9 +600,9 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("reset", reset))
-    app.add_handler(CommandHandler("search", search_cmd))
+    app.add_handler(CommandHandler("start",    start))
+    app.add_handler(CommandHandler("reset",    reset))
+    app.add_handler(CommandHandler("search",   search_cmd))
     app.add_handler(CommandHandler("trending", trending_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print("✅ TZTVN Bot يعمل الآن!")
