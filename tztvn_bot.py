@@ -8,13 +8,13 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
 from groq import Groq
 
-TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN")
-GROQ_API_KEY     = os.environ.get("GROQ_API_KEY")
-TMDB_API_KEY     = os.environ.get("TMDB_API_KEY")
-OMDB_API_KEY     = os.environ.get("OMDB_API_KEY")
-TRAKT_CLIENT_ID  = os.environ.get("TRAKT_CLIENT_ID")
-BOT_NAME         = "tztvn"
-MODEL_NAME       = "llama-3.3-70b-versatile"
+TELEGRAM_TOKEN  = os.environ.get("TELEGRAM_TOKEN")
+GROQ_API_KEY    = os.environ.get("GROQ_API_KEY")
+TMDB_API_KEY    = os.environ.get("TMDB_API_KEY")
+OMDB_API_KEY    = os.environ.get("OMDB_API_KEY")
+TRAKT_CLIENT_ID = os.environ.get("TRAKT_CLIENT_ID")
+BOT_NAME        = "tztvn"
+MODEL_NAME      = "llama-3.3-70b-versatile"
 
 logging.basicConfig(level=logging.INFO)
 
@@ -31,14 +31,22 @@ threading.Thread(target=lambda: HTTPServer(("0.0.0.0", 8080), PingHandler).serve
 
 # ── System Prompt ───────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """
-أنت الذكاء الاصطناعي الرسمي، الحصري، والناطق باسم منصة "TZTVN". أنت تعمل داخل مجموعة تيليجرام خاصة.
-عليك الالتزام بهذه القواعد:
-1. أنت "مساعد TZTVN السينمائي" فقط.
-2. نطاق حديثك: الأفلام، المسلسلات، التقييمات السينمائية فقط.
-3. إجاباتك 3 إلى 5 أسطر فقط.
-4. القنوات الرسمية: @tztvn و @o1tvn.
-5. كن ودوداً وحماسياً وعاشقاً للسينما.
-6. عندما ترفق معلومات الأفلام استخدمها بأسلوب جذاب.
+أنت مساعد سينمائي ذكي يعمل في مجموعة تيليجرام تابعة لمنصة TZTVN.
+
+شخصيتك:
+- عاشق حقيقي للسينما، تتحدث بحماس وعفوية.
+- ردودك واضحة ومنظمة، 4 إلى 8 أسطر.
+- عندما تحصل على معلومات فيلم، اشرحها بأسلوب جذاب وليس مجرد نسخ.
+- لا تكرر ذكر القنوات في كل رسالة — فقط عند الحاجة الفعلية مثل إذا سألوا عن المنصة.
+- القنوات الرسمية هي @tztvn و @o1tvn فقط إذا سُئلت عنها.
+- إذا لم تجد معلومات عن فيلم معين، قل ذلك بصراحة بدلاً من الاختراع.
+- تحدث بالعربية دائماً.
+- لا تبدأ ردك بـ "بالطبع" أو "أهلاً" في كل مرة.
+
+عند وصول معلومات فيلم:
+- استخدمها كاملة وقدّمها بأسلوب محادثة طبيعية.
+- لا تنسخ المعلومات حرفياً بل لخّصها بأسلوبك.
+- إذا التقييم عالٍ، عبّر عن حماسك. إذا كان منخفضاً كن صريحاً.
 """
 
 # ── Banned Content ──────────────────────────────────────────────────────────
@@ -73,76 +81,71 @@ def contains_banned(text: str) -> bool:
             return True
     return False
 
-# ── TMDb ────────────────────────────────────────────────────────────────────
-def search_tmdb(query: str) -> dict:
-    """Returns dict with keys: title, type_ar, date, rating, overview, tmdb_id, imdb_id"""
+# ── IMDb Unofficial — المصدر الأول ──────────────────────────────────────────
+def search_imdb_unofficial(query: str) -> dict:
+    """
+    يبحث في IMDb غير الرسمي أولاً.
+    يعيد: title, year, rating, plot, imdb_id, justwatch
+    """
     try:
-        url = "https://api.themoviedb.org/3/search/multi"
-        for lang in ["ar", "en-US"]:
-            r = requests.get(url, params={"api_key": TMDB_API_KEY, "query": query, "language": lang, "page": 1}, timeout=10)
-            data = r.json()
-            if data.get("results"):
-                break
-        if not data.get("results"):
+        base = "https://imdb.iamidiotareyoutoo.com"
+        r = requests.get(f"{base}/search", params={"q": query}, timeout=10)
+        if r.status_code != 200:
             return {}
-        item = data["results"][0]
-        media_type = item.get("media_type", "movie")
-        if media_type == "movie":
-            title    = item.get("title") or item.get("original_title", "غير معروف")
-            overview = item.get("overview", "لا يوجد وصف")
-            rating   = item.get("vote_average", 0)
-            date     = item.get("release_date", "")
-            type_ar  = "فيلم"
-        elif media_type == "tv":
-            title    = item.get("name") or item.get("original_name", "غير معروف")
-            overview = item.get("overview", "لا يوجد وصف")
-            rating   = item.get("vote_average", 0)
-            date     = item.get("first_air_date", "")
-            type_ar  = "مسلسل"
+        data = r.json()
+        # النتيجة قد تكون dict أو list
+        if isinstance(data, list):
+            if not data:
+                return {}
+            item = data[0]
+        elif isinstance(data, dict):
+            # إذا فيه مفتاح results
+            if data.get("#RESULTS"):
+                item = data["#RESULTS"][0]
+            else:
+                item = data
         else:
             return {}
-        tmdb_id = item.get("id")
-        # Get IMDb ID from TMDb details
-        imdb_id = ""
+
+        imdb_id  = item.get("#IMDB_ID", "") or item.get("imdb_id", "")
+        title    = item.get("#TITLE", "") or item.get("title", "")
+        year     = item.get("#YEAR", "") or item.get("year", "")
+        rating   = item.get("#IMDB_RATING", "") or item.get("rating", "")
+        actors   = item.get("#ACTORS", "") or item.get("actors", "")
+        plot     = item.get("#PLOT", "") or item.get("plot", "")
+        genre    = item.get("#GENRE", "") or item.get("genre", "")
+
+        if not title:
+            return {}
+
+        # JustWatch من نفس الـ API
+        jw_text = ""
         try:
-            detail_url = f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}/external_ids"
-            det = requests.get(detail_url, params={"api_key": TMDB_API_KEY}, timeout=8).json()
-            imdb_id = det.get("imdb_id", "")
+            jw_q = imdb_id if imdb_id else query
+            jw_r = requests.get(f"{base}/justwatch", params={"q": jw_q}, timeout=10)
+            jw_data = jw_r.json()
+            providers = []
+            items_list = jw_data if isinstance(jw_data, list) else [jw_data]
+            for jw_item in items_list:
+                name = jw_item.get("provider_name") or jw_item.get("name", "")
+                if name:
+                    providers.append(name)
+            if providers:
+                jw_text = " | ".join(f"▶️ {p}" for p in providers[:5])
         except:
             pass
+
         return {
-            "title": title, "type_ar": type_ar, "date": date,
-            "rating": rating, "overview": overview,
-            "tmdb_id": tmdb_id, "media_type": media_type, "imdb_id": imdb_id
+            "title": title, "year": year, "rating": rating,
+            "plot": plot, "genre": genre, "actors": actors,
+            "imdb_id": imdb_id, "justwatch": jw_text
         }
     except Exception as e:
-        logging.error(f"TMDb error: {e}")
+        logging.error(f"IMDb unofficial error: {e}")
         return {}
 
-# ── TMDb Watch Providers (JustWatch) ────────────────────────────────────────
-def get_watch_providers(tmdb_id: int, media_type: str) -> str:
-    """Returns a string like: Netflix ✅ | Disney+ ✅"""
-    try:
-        url = f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}/watch/providers"
-        r = requests.get(url, params={"api_key": TMDB_API_KEY}, timeout=8)
-        data = r.json().get("results", {})
-        # Try TN first, then FR, then US
-        region_data = data.get("TN") or data.get("FR") or data.get("US") or {}
-        if not region_data:
-            return ""
-        platforms = []
-        for entry in (region_data.get("flatrate") or region_data.get("free") or []):
-            platforms.append(entry.get("provider_name", ""))
-        if platforms:
-            return " | ".join(f"✅ {p}" for p in platforms[:4])
-        return ""
-    except Exception as e:
-        logging.error(f"Watch providers error: {e}")
-        return ""
-
-# ── OMDb ────────────────────────────────────────────────────────────────────
-def get_omdb_ratings(imdb_id: str = "", title: str = "") -> dict:
-    """Returns dict with imdb_rating, rt_rating, metacritic"""
+# ── OMDb — تقييمات إضافية ───────────────────────────────────────────────────
+def get_omdb_data(imdb_id: str = "", title: str = "") -> dict:
     try:
         params = {"apikey": OMDB_API_KEY}
         if imdb_id:
@@ -155,7 +158,7 @@ def get_omdb_ratings(imdb_id: str = "", title: str = "") -> dict:
         data = r.json()
         if data.get("Response") != "True":
             return {}
-        result = {}
+        result = {"director": data.get("Director", ""), "runtime": data.get("Runtime", "")}
         for rating in data.get("Ratings", []):
             src = rating.get("Source", "")
             val = rating.get("Value", "")
@@ -170,127 +173,172 @@ def get_omdb_ratings(imdb_id: str = "", title: str = "") -> dict:
         logging.error(f"OMDb error: {e}")
         return {}
 
-# ── IMDb Unofficial (iamidiotareyoutoo) ─────────────────────────────────────
-def get_imdb_unofficial(query: str, imdb_id: str = "") -> dict:
-    """Returns dict with title, year, plot, poster, justwatch"""
+# ── TMDb — احتياطي إذا فشل IMDb ─────────────────────────────────────────────
+def search_tmdb_fallback(query: str) -> dict:
     try:
-        base = "https://imdb.iamidiotareyoutoo.com"
-        if imdb_id:
-            r = requests.get(f"{base}/search", params={"tt": imdb_id}, timeout=10)
-        else:
-            r = requests.get(f"{base}/search", params={"q": query}, timeout=10)
-        data = r.json()
-        if not data:
+        url = "https://api.themoviedb.org/3/search/multi"
+        for lang in ["ar", "en-US"]:
+            r = requests.get(url, params={"api_key": TMDB_API_KEY, "query": query, "language": lang, "page": 1}, timeout=10)
+            data = r.json()
+            if data.get("results"):
+                break
+        if not data.get("results"):
             return {}
-        # Get JustWatch info
-        jw_text = ""
+        item = data["results"][0]
+        media_type = item.get("media_type", "movie")
+        if media_type == "movie":
+            title   = item.get("title") or item.get("original_title", "")
+            date    = item.get("release_date", "")
+            type_ar = "فيلم"
+        elif media_type == "tv":
+            title   = item.get("name") or item.get("original_name", "")
+            date    = item.get("first_air_date", "")
+            type_ar = "مسلسل"
+        else:
+            return {}
+        overview = item.get("overview", "")
+        rating   = item.get("vote_average", 0)
+        tmdb_id  = item.get("id")
+        imdb_id  = ""
         try:
-            jw_q = imdb_id if imdb_id else query
-            jw = requests.get(f"{base}/justwatch", params={"q": jw_q}, timeout=10).json()
-            if jw:
-                providers = []
-                for item in (jw if isinstance(jw, list) else [jw]):
-                    name = item.get("provider_name") or item.get("name", "")
-                    if name:
-                        providers.append(name)
-                if providers:
-                    jw_text = " | ".join(f"▶️ {p}" for p in providers[:4])
+            det = requests.get(
+                f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}/external_ids",
+                params={"api_key": TMDB_API_KEY}, timeout=8
+            ).json()
+            imdb_id = det.get("imdb_id", "")
         except:
             pass
-        return {"justwatch_unofficial": jw_text}
+        # Watch providers
+        watch = ""
+        try:
+            wp = requests.get(
+                f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}/watch/providers",
+                params={"api_key": TMDB_API_KEY}, timeout=8
+            ).json().get("results", {})
+            region = wp.get("TN") or wp.get("FR") or wp.get("US") or {}
+            platforms = []
+            for e in (region.get("flatrate") or region.get("free") or []):
+                platforms.append(e.get("provider_name", ""))
+            if platforms:
+                watch = " | ".join(f"▶️ {p}" for p in platforms[:4])
+        except:
+            pass
+        return {
+            "title": title, "type_ar": type_ar, "date": date,
+            "rating": rating, "overview": overview,
+            "imdb_id": imdb_id, "watch": watch
+        }
     except Exception as e:
-        logging.error(f"IMDb unofficial error: {e}")
+        logging.error(f"TMDb fallback error: {e}")
         return {}
 
 # ── Trakt Trending ──────────────────────────────────────────────────────────
 def get_trakt_trending(media_type: str = "movies", limit: int = 5) -> list:
-    """Returns list of dicts with title and year"""
     try:
-        url = f"https://api.trakt.tv/{media_type}/trending"
-        headers = {
-            "Content-Type": "application/json",
-            "trakt-api-version": "2",
-            "trakt-api-key": TRAKT_CLIENT_ID
-        }
-        r = requests.get(url, headers=headers, params={"limit": limit}, timeout=10)
-        data = r.json()
+        r = requests.get(
+            f"https://api.trakt.tv/{media_type}/trending",
+            headers={"Content-Type": "application/json", "trakt-api-version": "2", "trakt-api-key": TRAKT_CLIENT_ID},
+            params={"limit": limit}, timeout=10
+        )
         results = []
-        for item in data[:limit]:
+        for item in r.json()[:limit]:
             obj = item.get("movie") or item.get("show") or {}
-            results.append({
-                "title": obj.get("title", ""),
-                "year": obj.get("year", "")
-            })
+            results.append({"title": obj.get("title", ""), "year": obj.get("year", "")})
         return results
     except Exception as e:
         logging.error(f"Trakt error: {e}")
         return []
 
-# ── Build Full Movie Card ────────────────────────────────────────────────────
+# ── Build Movie Card — IMDb أولاً ────────────────────────────────────────────
 def build_movie_card(query: str) -> str:
-    tmdb = search_tmdb(query)
+    # 1. ابحث في IMDb أولاً
+    imdb_data = search_imdb_unofficial(query)
+
+    if imdb_data:
+        title    = imdb_data.get("title", "")
+        year     = imdb_data.get("year", "")
+        rating   = imdb_data.get("rating", "")
+        plot     = imdb_data.get("plot", "لا يوجد وصف")
+        genre    = imdb_data.get("genre", "")
+        actors   = imdb_data.get("actors", "")
+        imdb_id  = imdb_data.get("imdb_id", "")
+        jw       = imdb_data.get("justwatch", "")
+
+        # 2. أضف تقييمات OMDb
+        omdb = get_omdb_data(imdb_id=imdb_id, title=title)
+        rt_rating  = omdb.get("rt", "")
+        director   = omdb.get("director", "")
+        runtime    = omdb.get("runtime", "")
+        final_imdb = omdb.get("imdb", "") or (f"{rating}/10" if rating else "")
+
+        lines = [f"🎬 {title} ({year})"] if year else [f"🎬 {title}"]
+        if genre:    lines.append(f"🎭 النوع: {genre}")
+        if director: lines.append(f"🎥 المخرج: {director}")
+        if runtime:  lines.append(f"⏱️ المدة: {runtime}")
+
+        ratings_parts = []
+        if final_imdb: ratings_parts.append(f"⭐ IMDb: {final_imdb}")
+        if rt_rating:  ratings_parts.append(f"🍅 RT: {rt_rating}")
+        if ratings_parts: lines.append(" | ".join(ratings_parts))
+
+        if jw:
+            lines.append(f"📺 شاهده على: {jw}")
+        else:
+            lines.append("📺 غير متوفر حالياً على منصات البث")
+
+        if plot:
+            lines.append(f"📝 {plot[:220]}{'...' if len(plot) > 220 else ''}")
+
+        return "\n".join(lines)
+
+    # 3. إذا فشل IMDb، استخدم TMDb احتياطياً
+    tmdb = search_tmdb_fallback(query)
     if not tmdb:
         return ""
 
-    title    = tmdb["title"]
-    type_ar  = tmdb["type_ar"]
-    date     = tmdb.get("date", "")
-    rating   = tmdb.get("rating", 0)
-    overview = tmdb.get("overview", "")
-    tmdb_id  = tmdb.get("tmdb_id")
-    imdb_id  = tmdb.get("imdb_id", "")
-    media_type = tmdb.get("media_type", "movie")
+    title   = tmdb.get("title", "")
+    type_ar = tmdb.get("type_ar", "فيلم")
+    date    = tmdb.get("date", "")
+    rating  = tmdb.get("rating", 0)
+    overview= tmdb.get("overview", "لا يوجد وصف")
+    imdb_id = tmdb.get("imdb_id", "")
+    watch   = tmdb.get("watch", "")
 
-    # Date status
+    # تاريخ الإصدار
     status = "✅ نزل"
     if date:
         try:
-            release = datetime.strptime(date[:10], "%Y-%m-%d")
-            if release > datetime.now():
+            rel = datetime.strptime(date[:10], "%Y-%m-%d")
+            if rel > datetime.now():
                 status = f"🔜 لم ينزل بعد — {date[:10]}"
             else:
                 status = f"✅ نزل {date[:10]}"
         except:
             pass
 
-    # OMDb ratings
-    omdb = get_omdb_ratings(imdb_id=imdb_id, title=title)
+    omdb = get_omdb_data(imdb_id=imdb_id, title=title)
+    lines = [
+        f"🎬 [{type_ar}] {title}",
+        f"📅 {status}",
+    ]
+    ratings_parts = [f"⭐ TMDb: {rating}/10"]
+    if omdb.get("imdb"): ratings_parts.append(f"🎭 IMDb: {omdb['imdb']}")
+    if omdb.get("rt"):   ratings_parts.append(f"🍅 RT: {omdb['rt']}")
+    lines.append(" | ".join(ratings_parts))
 
-    # Watch providers from TMDb (JustWatch)
-    watch = get_watch_providers(tmdb_id, media_type) if tmdb_id else ""
-
-    # IMDb unofficial (JustWatch backup)
-    imdb_unoff = get_imdb_unofficial(query, imdb_id)
-    watch_backup = imdb_unoff.get("justwatch_unofficial", "")
-
-    # Build card
-    lines = [f"🎬 [{type_ar}] {title}", f"📅 {status}"]
-
-    # Ratings block
-    rating_parts = [f"⭐ TMDb: {rating}/10"]
-    if omdb.get("imdb"):
-        rating_parts.append(f"🎭 IMDb: {omdb['imdb']}")
-    if omdb.get("rt"):
-        rating_parts.append(f"🍅 RT: {omdb['rt']}")
-    lines.append(" | ".join(rating_parts))
-
-    # Where to watch
-    final_watch = watch or watch_backup
-    if final_watch:
-        lines.append(f"📺 شاهده على: {final_watch}")
+    if watch:
+        lines.append(f"📺 شاهده على: {watch}")
     else:
-        lines.append("📺 غير متوفر على منصات البث حالياً")
+        lines.append("📺 غير متوفر حالياً على منصات البث")
 
-    # Overview
-    lines.append(f"📝 {overview[:200]}{'...' if len(overview) > 200 else ''}")
-
+    lines.append(f"📝 {overview[:220]}{'...' if len(overview) > 220 else ''}")
     return "\n".join(lines)
 
-# ── Keywords ────────────────────────────────────────────────────────────────
+# ── Movie Keywords ───────────────────────────────────────────────────────────
 MOVIE_KEYWORDS = [
     "فيلم","مسلسل","نزل","يطلع","طلع","اصدر","صدر","موعد","اصدار",
-    "متى","هل","عرض","الجزء","سيزون","موسم",
-    "movie","series","film","release","out","watch","season"
+    "متى","عرض","الجزء","سيزون","موسم","ممثل","مخرج","تقييم",
+    "movie","series","film","release","out","watch","season","actor","director"
 ]
 
 def is_movie_question(text):
@@ -300,8 +348,8 @@ def extract_movie_name(text):
     removes = [
         "هل نزل","هل طلع","هل اصدر","هل صدر","متى ينزل","متى يطلع",
         "متى نزل","موعد","فيلم","مسلسل","الجزء","سيزون","موسم",
-        "هل","نزل","طلع","اصدر","صدر","ينزل","يطلع",
-        "is","out","has","when","does","movie","series","the","released","release"
+        "هل","نزل","طلع","اصدر","صدر","ينزل","يطلع","اخبرني عن","ما هو",
+        "is","out","has","when","does","movie","series","the","released","release","tell me about"
     ]
     result = text.strip()
     for r in removes:
@@ -335,21 +383,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     movie_card = ""
-    if is_movie_question(text):
-        movie_name = extract_movie_name(text)
-        if len(movie_name) > 2:
+    clean_text = text.replace(f"@{bot_me.username}", "").replace("tztvn", "").strip()
+    if is_movie_question(clean_text):
+        movie_name = extract_movie_name(clean_text)
+        if len(movie_name) > 1:
             movie_card = build_movie_card(movie_name)
 
-    user_message = f"{user_name}: {text}"
+    user_message = f"{user_name}: {clean_text}"
     if movie_card:
-        user_message += f"\n\n[معلومات الفيلم:]\n{movie_card}"
+        user_message += f"\n\n[بيانات الفيلم من قواعد البيانات:]\n{movie_card}"
+    else:
+        user_message += "\n[لم يُعثر على بيانات فيلم محدد]"
 
     chat_history[chat_id].append({"role": "user", "content": user_message})
 
     try:
         response = groq_client.chat.completions.create(
             model=MODEL_NAME,
-            temperature=0.6,
+            temperature=0.7,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
                 *chat_history[chat_id][-20:]
@@ -357,7 +408,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         reply = response.choices[0].message.content
         if contains_banned(reply):
-            reply = "عذراً، لا يمكنني الإجابة. 🎬 هل تبحث عن توصية سينمائية؟"
+            reply = "عذراً، لا يمكنني الإجابة على هذا. 🎬"
         chat_history[chat_id].append({"role": "assistant", "content": reply})
         await update.message.reply_text(reply)
     except Exception as e:
@@ -366,35 +417,42 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🎬 مرحباً بك في مساعد TZTVN السينمائي!\n"
-        "ناديني بـ @tztvn أو اذكر اسمي في المجموعة 😊"
+        "🎬 مرحباً! أنا مساعد TZTVN السينمائي.\n"
+        "اسألني عن أي فيلم أو مسلسل وسأعطيك كل التفاصيل 😊\n"
+        "جرب: /search Inception أو /trending"
     )
 
 async def search_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("🔍 مثال: /search Dune")
+        await update.message.reply_text("🔍 مثال: /search Inception")
         return
     query = " ".join(context.args)
-    card  = build_movie_card(query)
+    await update.message.reply_text("🔍 جاري البحث...")
+    card = build_movie_card(query)
     if card:
-        await update.message.reply_text(f"🎬 نتيجة:\n\n{card}")
+        await update.message.reply_text(card)
     else:
-        await update.message.reply_text(f"❌ لم أجد نتائج لـ '{query}'.")
+        await update.message.reply_text(
+            f"❌ لم أجد معلومات كافية عن '{query}'.\n"
+            "جرب كتابة اسم الفيلم بالإنجليزية أو تأكد من الاسم الصحيح."
+        )
 
 async def trending_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     movies = get_trakt_trending("movies", 5)
     shows  = get_trakt_trending("shows", 5)
-    msg = "🔥 الأفلام الأكثر مشاهدة الآن:\n"
+    msg = "🎬 الأفلام الأكثر مشاهدة هذا الأسبوع:\n"
     for i, m in enumerate(movies, 1):
-        msg += f"{i}. {m['title']} ({m['year']})\n"
-    msg += "\n📺 المسلسلات الأكثر مشاهدة الآن:\n"
+        msg += f"  {i}. {m['title']} ({m['year']})\n"
+    msg += "\n📺 المسلسلات الأكثر مشاهدة هذا الأسبوع:\n"
     for i, s in enumerate(shows, 1):
-        msg += f"{i}. {s['title']} ({s['year']})\n"
+        msg += f"  {i}. {s['title']} ({s['year']})\n"
+    if not movies and not shows:
+        msg = "⚠️ تعذّر جلب قائمة الترند حالياً، حاول لاحقاً."
     await update.message.reply_text(msg)
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_history[update.message.chat_id] = []
-    await update.message.reply_text("✅ تم مسح تاريخ المحادثة!")
+    await update.message.reply_text("✅ تم مسح سجل المحادثة.")
 
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
